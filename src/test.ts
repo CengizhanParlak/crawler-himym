@@ -23,18 +23,31 @@ async function test() {
         else return [[...s, { title, script: value }], [...e]];
       }
     },
-    [[], []] as [{ title: string; script: Script }[], { title: string; error: any }[]]
+    [[], []] as [{ title: string; script: (Line | SceneCue)[] }[], { title: string; error: any }[]]
   );
-
+  
   if (errorList.length > 0) {
     console.log(`=== Error List ${errorList.length}/${episodeList.length} ===`);
-    episodeList.forEach((e) => {
+    errorList.forEach((e) => {
       console.log(e.title);
-      e instanceof FunctionError ? console.log(e.trace) : console.log(e);
+      e.error instanceof FunctionError ? console.log(e.error.trace) : console.log(e.error);
     });
   }
-
+  
   await saver(scriptList);
 }
+
+// Update type definitions
+type Line = {
+    type: 'dialogue';
+    character: string;
+    dialogue: string;
+  };
+  
+  type SceneCue = {
+    type: 'sceneCue';
+    content: string;
+  };
+  
 
 test();

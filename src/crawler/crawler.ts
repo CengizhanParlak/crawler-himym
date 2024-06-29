@@ -23,47 +23,74 @@ const getDOM = asyncErrorTracer(async function getDOM(url: string) {
 });
 
 export const getScript = asyncErrorTracer(async function getScript({ title, url }: Episode) {
-  const $ = await getDOM(url);
-  if ($ instanceof FunctionError) return $;
-
-  const pList = $('.postbody > p');
-
-  const script: Script = [];
-  // const script = new Proxy([], {
-  //   get(target, idx) {
-  //     if (!isNaN(idx)) {
-  //       idx = parseInt(idx, 10);
-  //       if (idx < 0) idx += target.length;
-  //     }
-  //     return target[idx];
-  //   },
-  // });
-
-  pList.each((i, p) => {
-    const pInnerText = $(p).text();
-    if (pInnerText.includes(':')) {
-      const [character, _dialogue] = pInnerText.split(':');
-      const dialogue = _dialogue.trim();
-      const line: Line = { character, dialogue };
-      script.push(line);
+    const $ = await getDOM(url);
+    if ($ instanceof FunctionError) return $;
+  
+    const contentHtml = $('.content').html();
+  
+    const script: (Line | SceneCue)[] = [];
+  
+    if (contentHtml) {
+      const paragraphs = contentHtml.split('<br>');
+      paragraphs.forEach((paragraph) => {
+        paragraph = paragraph.trim();
+        
+        // Handle scene cues in italics or parentheses
+        if (paragraph.startsWith('<em') || paragraph.startsWith('(')) {
+          script.push({
+            type: 'sceneCue',
+            content: paragraph.replace(/<[^>]*>/g, '').replace(/^\(|\)$/g, '').trim()
+          });
+          return;
+        }
+        
+        // Handle [END] or similar markers
+        if (paragraph.startsWith('[') && paragraph.endsWith(']')) {
+          script.push({
+            type: 'sceneCue',
+            content: paragraph.trim()
+          });
+          return;
+        }
+  
+        // Handle character dialogue
+        if (paragraph.includes(':')) {
+          const [character, dialogue] = paragraph.split(':');
+          if (character && dialogue) {
+            script.push({
+              type: 'dialogue',
+              character: character.replace(/<[^>]*>/g, '').trim(),
+              dialogue: dialogue.replace(/<[^>]*>/g, '').trim()
+            });
+          }
+        } else if (paragraph.startsWith('<strong class="text-strong">') && paragraph.includes('</strong>:')) {
+          const [character, dialogue] = paragraph.split('</strong>:');
+          if (character && dialogue) {
+            script.push({
+              type: 'dialogue',
+              character: character.replace(/<[^>]*>/g, '').trim(),
+              dialogue: dialogue.replace(/<[^>]*>/g, '').trim()
+            });
+          }
+        }
+      });
     }
-    // else if (pInnerText.includes(':...')) {
-    //   const [character, _] = pInnerText.split(':');
-    //   const dialogue = _.replace(/\.\.\./g, '').trim();
-    //   const line = script.pop();
-    //   if (line[0] === character) line[1] = line[1].concat(' ', dialogue);
-    //   else {
-    //     console.log('\n#### Warning: line[0] !== character');
-    //     console.log(line);
-    //     console.log(pInnerText);
-    //   }
-    //   script.push(line);
-    // }
+  
+    console.log(`getScript done: ${title}`);
+    return script;
   });
-
-  console.log(`getScript done: ${title}`);
-  return script;
-});
+  
+  // Update type definitions
+  type Line = {
+    type: 'dialogue';
+    character: string;
+    dialogue: string;
+  };
+  
+  type SceneCue = {
+    type: 'sceneCue';
+    content: string;
+  };
 
 // test
 export const getEpisodeListOnPage = asyncErrorTracer(async function getEpisodeListOnPage(page: number) {
@@ -71,12 +98,13 @@ export const getEpisodeListOnPage = asyncErrorTracer(async function getEpisodeLi
   const $ = await getDOM(`${BASE_URL}/viewforum.php?f=177&start=${GAP * page}`);
   if ($ instanceof FunctionError) return $;
 
-  const aList = $('tbody > tr:nth-child(n+4) > td:first-child > h3 > a');
+  const aList = $('.topics li .topictitle');
+
   aList.each((i, a) => {
-    const aTag = $(a);
-    const title = aTag.text();
-    const url = BASE_URL + aTag.attr('href')!.slice(1);
-    episodeList.push({ title, url });
+      const aTag = $(a);
+      const title = aTag.text();
+      const url = BASE_URL + aTag.attr('href')!.slice(1); // Assuming href="./viewtopic.php?t=XXXXX", adjust as necessary
+      episodeList.push({ title, url });
   });
 
   return episodeList;

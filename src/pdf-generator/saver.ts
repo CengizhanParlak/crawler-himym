@@ -54,83 +54,119 @@ const writeLine = syncErrorTracer(function writeLine(doc: PDFKit.PDFDocument, ch
 });
 
 const pdfSaver = syncErrorTracer(function pdfSaver(titleRaw: string, script: Script): Promise<string | FunctionError> {
-  return new Promise((resolve, reject) => {
-    try {
-      const [season, ep] = titleRaw.split('x');
-      const [episodeNum, _title] = ep.split(' - ');
-      const title = _title.replace(/ /g, '_');
-      const episode: EpisodeNum = { num: episodeNum, title };
-
-      let pendingStepCount = 2;
-      const stepFinished = () => {
-        if (--pendingStepCount == 0) {
-          const SuccessMessage = `pdfSaver done: season${season}/${episodeNum}.${title}.pdf`;
-          console.log(SuccessMessage);
-          resolve(SuccessMessage);
+    return new Promise((resolve, reject) => {
+      try {
+        if (!titleRaw.includes('x')){
+          console.log(`not an episode: ${titleRaw}`);
+          return reject(new FunctionError(`not an episode: ${titleRaw}`));
         }
-      };
-
-      const doc = new PDFDocument({ size: 'A4', font: 'Times-Roman', margins: { top: 50, bottom: 50, left: 60, right: 60 } });
-
-      // Set path
-      const writeStream = getWriteStream(doc, season, episode);
-      if (writeStream instanceof FunctionError) return reject(writeStream);
-
-      writeStream.on('finish', stepFinished);
-      doc.pipe(writeStream);
-
-      // Write
-      doc.font('Helvetica-Bold').fontSize(H1.fontSize).text(titleRaw, { align: 'center' });
-      doc.moveDown();
-
-      doc.fontSize(P.fontSize);
-      script.forEach(({ character, dialogue }) => writeLine(doc, character, dialogue));
-
-      // End
-      doc.end();
-      stepFinished();
-    } catch (error) {
-      //TODO: FunctionError
-      const message = `pdfSaver error: ${titleRaw}\n`;
-      if (error instanceof Error) {
-        const err = new FunctionError(error);
-        err.addTrace(message);
-        return reject(err);
-      } else {
-        console.error(error);
-        return reject(new FunctionError(message));
+        const [season, ep] = titleRaw.split('x');
+        const [episodeNum, _title] = ep.split(' - ');
+        const title = _title.replace(/ /g, '_');
+        const episode: EpisodeNum = { num: episodeNum, title };
+  
+        let pendingStepCount = 2;
+        const stepFinished = () => {
+          if (--pendingStepCount == 0) {
+            const SuccessMessage = `pdfSaver done: season${season}/${episodeNum}.${title}.pdf`;
+            console.log(SuccessMessage);
+            resolve(SuccessMessage);
+          }
+        };
+  
+        const doc = new PDFDocument({ size: 'A4', font: 'Times-Roman', margins: { top: 50, bottom: 50, left: 60, right: 60 } });
+  
+        // Set path
+        const writeStream = getWriteStream(doc, season, episode);
+        if (writeStream instanceof FunctionError) return reject(writeStream);
+  
+        writeStream.on('finish', stepFinished);
+        doc.pipe(writeStream);
+  
+        // Write
+        doc.font('Helvetica-Bold').fontSize(H1.fontSize).text(titleRaw, { align: 'center' });
+        doc.moveDown();
+  
+        doc.fontSize(P.fontSize);
+        script.forEach((item) => {
+          if (item.type === 'dialogue') {
+            writeLine(doc, item.character, item.dialogue);
+          } else if (item.type === 'sceneCue') {
+            writeSceneCue(doc, item.content);
+          }
+        });
+  
+        // End
+        doc.end();
+        stepFinished();
+      } catch (error) {
+        const message = `pdfSaver error: ${titleRaw}\n`;
+        if (error instanceof Error) {
+          const err = new FunctionError(error);
+          err.addTrace(message);
+          return reject(err);
+        } else {
+          console.error(error);
+          return reject(new FunctionError(message));
+        }
       }
-    }
+    });
   });
-});
+  
+function writeSceneCue(doc: PDFKit.PDFDocument, content: string) {
+  let wrappedContent = '';
+  if (content.includes('[' || ']')) {
+    wrappedContent = content;
+  } else {
+    wrappedContent = `(${content})`;
+  }
+  
+  doc.font('Helvetica-Oblique').text(wrappedContent, { align: 'left' });
+  doc.moveDown(0.5); 
+}
+
 
 export async function saver(scriptList: { title: string; script: Script }[]) {
-  if (!existsSync(SAVE_DIR)) {
-    mkdirSync(SAVE_DIR);
-    console.log(`Create a directory: ${SAVE_DIR}`);
+    if (!existsSync(SAVE_DIR)) {
+      mkdirSync(SAVE_DIR);
+      console.log(`Create a directory: ${SAVE_DIR}`);
+    }
+  
+    const pdfPromiseList = scriptList.map(({ title, script }) => pdfSaver(title, script));
+    const settledPdfList = await Promise.allSettled(pdfPromiseList);
+  
+    const [pdfList, errorList] = settledPdfList.reduce(
+      ([p, e], promiseResult, i) => {
+        const { title } = scriptList[i];
+        if (promiseResult.status === 'rejected') return [[...p], [...e, { title, error: promiseResult.reason }]];
+        else {
+          const { value } = promiseResult;
+          if (value instanceof FunctionError) return [[...p], [...e, { title, error: value }]];
+          else return [[...p, { title }], [...e]];
+        }
+      },
+      [[], []] as [{ title: string }[], { title: string; error: any }[]]
+    );
+  
+    if (errorList.length > 0) {
+      console.log(`=== Error List ${errorList.length}/${scriptList.length} ===`);
+      errorList.forEach((e) => {
+        console.log(e.title);
+        e.error instanceof FunctionError ? console.log(e.error.trace) : console.log(e.error);
+      });
+    }
   }
-
-  const pdfPromiseList = scriptList.map(({ title, script }) => pdfSaver(title, script));
-  const settledPdfList = await Promise.allSettled(pdfPromiseList);
-
-  const [pdfList, errorList] = settledPdfList.reduce(
-    ([p, e], promiseResult, i) => {
-      const { title } = scriptList[i];
-      if (promiseResult.status === 'rejected') return [[...p], [...e, { title, error: promiseResult.reason }]];
-      else {
-        const { value } = promiseResult;
-        if (value instanceof FunctionError) return [[...p], [...e, { title, error: value }]];
-        else return [[...p, { title }], [...e]];
-      }
-    },
-    [[], []] as [{ title: string }[], { title: string; error: any }[]]
-  );
-
-  if (errorList.length > 0) {
-    console.log(`=== Error List ${errorList.length}/${errorList.length} ===`);
-    errorList.forEach((e) => {
-      console.log(e.title);
-      e instanceof FunctionError ? console.log(e.trace) : console.log(e);
-    });
-  }
-}
+  
+  // Update type definitions if not already defined elsewhere
+  type Line = {
+    type: 'dialogue';
+    character: string;
+    dialogue: string;
+  };
+  
+  type SceneCue = {
+    type: 'sceneCue';
+    content: string;
+  };
+  
+  type Script = (Line | SceneCue)[];
