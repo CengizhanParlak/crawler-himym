@@ -1,8 +1,8 @@
-import axios from 'axios';
-import * as cheerio from 'cheerio';
-import { asyncErrorTracer, FunctionError } from '../lib/error.handler';
+import axios from "axios";
+import * as cheerio from "cheerio";
+import { asyncErrorTracer, FunctionError } from "../lib/error.handler";
 
-const BASE_URL = 'https://transcripts.foreverdreaming.org';
+const BASE_URL = "https://transcripts.foreverdreaming.org";
 const GAP = 25;
 
 const getDOM = asyncErrorTracer(async function getDOM(url: string) {
@@ -22,95 +22,143 @@ const getDOM = asyncErrorTracer(async function getDOM(url: string) {
   }
 });
 
-export const getScript = asyncErrorTracer(async function getScript({ title, url }: Episode) {
-    const $ = await getDOM(url);
-    if ($ instanceof FunctionError) return $;
-  
-    const contentHtml = $('.content').html();
-  
-    const script: (Line | SceneCue)[] = [];
-  
-    if (contentHtml) {
-      const paragraphs = contentHtml.split('<br>');
-      paragraphs.forEach((paragraph) => {
-        paragraph = paragraph.trim();
-        
-        // Handle scene cues in italics or parentheses
-        if (paragraph.startsWith('<em') || paragraph.startsWith('(')) {
-          script.push({
-            type: 'sceneCue',
-            content: paragraph.replace(/<[^>]*>/g, '').replace(/^\(|\)$/g, '').trim()
-          });
-          return;
-        }
-        
-        // Handle [END] or similar markers
-        if (paragraph.startsWith('[') && paragraph.endsWith(']')) {
-          script.push({
-            type: 'sceneCue',
-            content: paragraph.trim()
-          });
-          return;
-        }
-  
-        // Handle character dialogue
-        if (paragraph.includes(':')) {
-          const [character, dialogue] = paragraph.split(':');
-          if (character && dialogue) {
-            script.push({
-              type: 'dialogue',
-              character: character.replace(/<[^>]*>/g, '').trim(),
-              dialogue: dialogue.replace(/<[^>]*>/g, '').trim()
-            });
-          }
-        } else if (paragraph.startsWith('<strong class="text-strong">') && paragraph.includes('</strong>:')) {
-          const [character, dialogue] = paragraph.split('</strong>:');
-          if (character && dialogue) {
-            script.push({
-              type: 'dialogue',
-              character: character.replace(/<[^>]*>/g, '').trim(),
-              dialogue: dialogue.replace(/<[^>]*>/g, '').trim()
-            });
-          }
-        }
-      });
-    }
-  
-    console.log(`getScript done: ${title}`);
-    return script;
-  });
-  
-  // Update type definitions
-  type Line = {
-    type: 'dialogue';
-    character: string;
-    dialogue: string;
-  };
-  
-  type SceneCue = {
-    type: 'sceneCue';
-    content: string;
-  };
-
-// test
-export const getEpisodeListOnPage = asyncErrorTracer(async function getEpisodeListOnPage(page: number) {
-  const episodeList: Episode[] = [];
-  const $ = await getDOM(`${BASE_URL}/viewforum.php?f=177&start=${GAP * page}`);
+export const getScript = asyncErrorTracer(async function getScript({
+  title,
+  url,
+}: Episode) {
+  const $ = await getDOM(url);
   if ($ instanceof FunctionError) return $;
 
-  const aList = $('.topics li .topictitle');
+  let contentHtml = $(".content").html();
 
-  aList.each((i, a) => {
-      const aTag = $(a);
-      const title = aTag.text();
-      const url = BASE_URL + aTag.attr('href')!.slice(1); // Assuming href="./viewtopic.php?t=XXXXX", adjust as necessary
-      episodeList.push({ title, url });
-  });
+  // Remove all <div> elements and their contents
+  if (contentHtml) {
+    contentHtml = contentHtml.replace(/<div\b[^>]*>(.*?)<\/div>/gi, "");
+  }
 
-  return episodeList;
+  const script: (Line | SceneCue)[] = [];
+
+  if (contentHtml) {
+    const paragraphs = contentHtml.split("<br>");
+    paragraphs.forEach((paragraph) => {
+      paragraph = paragraph.trim();
+
+      if (paragraph === "") return; // Skip empty paragraphs
+
+      // Handle bold scene markers
+      if (
+        paragraph.startsWith('<strong class="text-strong">[') &&
+        paragraph.endsWith("]</strong>")
+      ) {
+        script.push({
+          type: "sceneCue",
+          content: paragraph.replace(/<[^>]*>/g, "").trim(),
+          isBold: true,
+        });
+        return;
+      }
+
+      // Handle scene cues in italics or parentheses
+      if (paragraph.startsWith("<em") || paragraph.startsWith("(")) {
+        script.push({
+          type: "sceneCue",
+          content: paragraph
+            .replace(/<[^>]*>/g, "")
+            .replace(/^\(|\)$/g, "")
+            .trim(),
+          isBold: false,
+        });
+        return;
+      }
+
+      // Handle [END] or similar markers
+      if (paragraph.startsWith("[") && paragraph.endsWith("]")) {
+        script.push({
+          type: "sceneCue",
+          content: paragraph.trim(),
+          isBold: false,
+        });
+        return;
+      }
+
+      // Handle character dialogue
+      if (paragraph.includes(":")) {
+        const [character, dialogue] = paragraph.split(":");
+        if (character && dialogue) {
+          script.push({
+            type: "dialogue",
+            character: character.replace(/<[^>]*>/g, "").trim(),
+            dialogue: dialogue.replace(/<[^>]*>/g, "").trim(),
+          });
+        }
+      } else if (
+        paragraph.startsWith('<strong class="text-strong">') &&
+        paragraph.includes("</strong>:")
+      ) {
+        const [character, dialogue] = paragraph.split("</strong>:");
+        if (character && dialogue) {
+          script.push({
+            type: "dialogue",
+            character: character.replace(/<[^>]*>/g, "").trim(),
+            dialogue: dialogue.replace(/<[^>]*>/g, "").trim(),
+          });
+        }
+      } else {
+        // Handle dialogues without character names
+        const cleanedParagraph = paragraph.replace(/<[^>]*>/g, "").trim();
+        if (cleanedParagraph) {
+          script.push({
+            type: "dialogue",
+            character: "-",
+            dialogue: cleanedParagraph,
+          });
+        }
+      }
+    });
+  }
+
+  console.log(`getScript done: ${title}`);
+  return script;
 });
 
-export const getEpisodeList = asyncErrorTracer(async function getEpisodeList(pageNum: number) {
+// Update the SceneCue type
+type SceneCue = {
+  type: "sceneCue";
+  content: string;
+  isBold: boolean;
+};
+// Update type definitions
+type Line = {
+  type: "dialogue";
+  character: string;
+  dialogue: string;
+};
+
+// test
+export const getEpisodeListOnPage = asyncErrorTracer(
+  async function getEpisodeListOnPage(page: number) {
+    const episodeList: Episode[] = [];
+    const $ = await getDOM(
+      `${BASE_URL}/viewforum.php?f=177&start=${GAP * page}`
+    );
+    if ($ instanceof FunctionError) return $;
+
+    const aList = $(".topics li .topictitle");
+
+    aList.each((i, a) => {
+      const aTag = $(a);
+      const title = aTag.text();
+      const url = BASE_URL + aTag.attr("href")!.slice(1); // Assuming href="./viewtopic.php?t=XXXXX", adjust as necessary
+      episodeList.push({ title, url });
+    });
+
+    return episodeList;
+  }
+);
+
+export const getEpisodeList = asyncErrorTracer(async function getEpisodeList(
+  pageNum: number
+) {
   let episodeList: Episode[] = [];
 
   for (let page = 0; page < pageNum; page++) {
